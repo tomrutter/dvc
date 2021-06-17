@@ -186,3 +186,50 @@ class State(StateBase):  # pylint: disable=too-many-instance-attributes
         with self.links as ref:
             for path in unused:
                 del ref[path]
+
+
+def _connect_sqlite(filename, options):
+    # Connect by URI was added in Python 3.4 and sqlite 3.7.7,
+    # we ignore options, which should be fine unless repo is on old NFS/CIFS
+    import sqlite3
+
+    if sqlite3.sqlite_version_info < (3, 7, 7):
+        return sqlite3.connect(filename)
+
+    uri = _build_sqlite_uri(filename, options)
+    return sqlite3.connect(uri, uri=True)
+
+
+def _build_sqlite_uri(filename, options):
+    # In the doc mentioned below we only need to replace ? -> %3f and
+    # # -> %23, but, if present, we also need to replace % -> %25 first
+    # (happens when we are on a weird FS that shows urlencoded filenames
+    # instead of proper ones) to not confuse sqlite.
+    uri_path = filename.replace("%", "%25")
+
+    # Convert filename to uri according to https://www.sqlite.org/uri.html, 3.1
+    uri_path = uri_path.replace("?", "%3f").replace("#", "%23")
+    authority = ""
+    if os.name == "nt":
+        uri_path = uri_path.replace("\\", "/")
+        if (len(uri_path) > 2) and (uri_path[:2] == "//"):
+            # The path is a URN path
+            # Due to a bug in sqlite, the standard URI of:
+            # file://server/dir/file
+            # doesn't work, so need to either use:
+            # file:////server/dir/file
+            # or
+            # file://localhost//server/dir/file
+            # easiest to do the latter with current structure
+            # In future versions of sqlite, this may not be necessary
+            authority = "localhost"
+        else:
+            uri_path = re.sub(r"^([a-z]:)", "/\\1", uri_path, flags=re.I)
+            uri_path = re.sub(r"/+", "/", uri_path)
+    else:
+        uri_path = re.sub(r"/+", "/", uri_path)
+
+    # Empty netloc, params and fragment
+    return urlunparse(
+        ("file", authority, uri_path, "", urlencode(options), "")
+    )
